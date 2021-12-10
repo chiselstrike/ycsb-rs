@@ -9,6 +9,7 @@ use std::time::Instant;
 use structopt::StructOpt;
 use workload::CoreWorkload;
 
+pub mod chiselstore;
 pub mod db;
 pub mod generator;
 pub mod properties;
@@ -59,20 +60,27 @@ async fn main() -> Result<()> {
     let database = opt.database.clone();
     let thread_operation_count = props.operation_count as usize / opt.threads;
     for cmd in opt.commands {
+        let mut dbs: Vec<Arc<dyn DB + Sync + Send>> = vec![];
+        for _ in 0..opt.threads {
+            let db = db::create_db(&database).await.unwrap();
+            db.init().await.unwrap();
+            dbs.push(db);
+        }
         let start = Instant::now();
         let mut threads = vec![];
         for _ in 0..opt.threads {
-            let database = database.clone();
             let wl = wl.clone();
             let cmd = cmd.clone();
+            let db = dbs.remove(0);
             let task = tokio::task::spawn(async move {
                 let wl = wl.clone();
-                let db = db::create_db(&database).unwrap();
 
-                db.init().unwrap();
                 match &cmd[..] {
-                    "load" => load(wl.clone(), db, thread_operation_count as usize).await,
-                    "run" => run(wl.clone(), db, thread_operation_count as usize).await,
+                    "load" => {
+                        db.create_schema().await.unwrap();
+                        load(wl.clone(), db.clone(), thread_operation_count as usize).await;
+                    }
+                    "run" => run(wl.clone(), db.clone(), thread_operation_count as usize).await,
                     cmd => panic!("invalid command: {}", cmd),
                 };
             });
